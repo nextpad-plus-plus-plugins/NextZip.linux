@@ -36,6 +36,12 @@ GtkWidget* dlgNew(Dlg* d, const char* title, bool resizable = false) {
 	gtk_window_set_modal(GTK_WINDOW(d->win), TRUE);
 	if (g_parent) gtk_window_set_transient_for(GTK_WINDOW(d->win), g_parent);
 	gtk_window_set_resizable(GTK_WINDOW(d->win), resizable);
+	// CRITICAL: without this, gtk_window_close() DESTROYS the window and its
+	// whole child tree, and every widget read after dlgRun() is a
+	// use-after-free (seen live: GTK_IS_EDITABLE assertion → NULL →
+	// std::string(NULL) → std::terminate). Close now only hides; DlgGuard
+	// destroys the window after the values have been read.
+	gtk_window_set_hide_on_close(GTK_WINDOW(d->win), TRUE);
 
 	GtkWidget* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_set_margin_start(outer, 16); gtk_widget_set_margin_end(outer, 16);
@@ -61,6 +67,13 @@ GtkWidget* dlgNew(Dlg* d, const char* title, bool resizable = false) {
 	gtk_widget_add_controller(d->win, keys);
 	return outer;
 }
+
+// Destroys the dialog window at scope exit — AFTER all widget reads.
+struct DlgGuard {
+	Dlg* d;
+	explicit DlgGuard(Dlg* dd) : d(dd) {}
+	~DlgGuard() { if (d && d->win) { gtk_window_destroy(GTK_WINDOW(d->win)); d->win = nullptr; } }
+};
 
 void dlgRun(Dlg* d) {
 	d->loop = g_main_loop_new(nullptr, FALSE);
@@ -440,6 +453,7 @@ NZAddOptions runAddForInputs(const std::vector<std::string>& inputs) {
 
 	AddState st;
 	GtkWidget* outer = dlgNew(&st.d, "Add to Archive");
+	DlgGuard guard(&st.d);
 
 	// path row
 	GtkWidget* pathRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -655,6 +669,7 @@ NZExtractOptions runExtractForArchive(const std::string& archivePath) {
 
 	Dlg d;
 	GtkWidget* outer = dlgNew(&d, "Extract");
+	DlgGuard guard(&d);
 
 	GtkWidget* destRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
 	gtk_box_append(GTK_BOX(destRow), leftLabel("Extract to:"));
@@ -725,6 +740,7 @@ NZExtractOptions runExtractForArchive(const std::string& archivePath) {
 void showInfoTitle(const std::string& title, const std::string& text) {
 	Dlg d;
 	GtkWidget* outer = dlgNew(&d, title.empty() ? "Information" : title.c_str(), /*resizable=*/true);
+	DlgGuard guard(&d);
 	gtk_window_set_default_size(GTK_WINDOW(d.win), 640, 360);
 
 	GtkWidget* scroll = gtk_scrolled_window_new();
@@ -761,6 +777,7 @@ void showInfoTitle(const std::string& title, const std::string& text) {
 bool promptPasswordForArchive(const std::string& archiveName, bool wrong, std::string& out) {
 	Dlg d;
 	GtkWidget* outer = dlgNew(&d, "Password");
+	DlgGuard guard(&d);
 
 	std::string prompt = archiveName.empty()
 		? std::string("Enter password:")
