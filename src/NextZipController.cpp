@@ -344,10 +344,13 @@ struct NextZipController::Impl {
 			gtk_tree_view_column_add_attribute(col, rt, "text", FS_NAME);
 			gtk_tree_view_append_column(GTK_TREE_VIEW(fsView), col);
 		}
-		g_signal_connect(fsView, "row-expanded", G_CALLBACK(+[](GtkTreeView* tv, GtkTreeIter* it,
-		                                                        GtkTreePath*, gpointer u) {
-			((Impl*)u)->fsRowExpanded(tv, it);
-		}), this);
+		// Populate on test-expand-row (BEFORE the view starts expanding), never on
+		// row-expanded — see fsTestExpandRow for why.
+		g_signal_connect(fsView, "test-expand-row",
+			G_CALLBACK(+[](GtkTreeView*, GtkTreeIter* it, GtkTreePath*, gpointer u) -> gboolean {
+				((Impl*)u)->fsTestExpandRow(it);
+				return FALSE;   // FALSE = allow the expansion to proceed
+			}), this);
 		g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(fsView)), "changed",
 			G_CALLBACK(+[](GtkTreeSelection* sel, gpointer u) { ((Impl*)u)->fsSelectionChanged(sel); }), this);
 		g_signal_connect(fsView, "row-activated",
@@ -476,14 +479,26 @@ struct NextZipController::Impl {
 			return g_ascii_strcasecmp(a.first.c_str(), b.first.c_str()) < 0;
 		});
 	}
-	void fsRowExpanded(GtkTreeView*, GtkTreeIter* it) {
+	// Lazy-load a directory's children. MUST run on "test-expand-row", i.e.
+	// BEFORE the view expands, and MUST append the real rows BEFORE dropping the
+	// placeholder:
+	//   • Populating from "row-expanded" mutates the model while GtkTreeView is
+	//     mid-expand. Removing the placeholder first left the row with ZERO
+	//     children for an instant, so the view abandoned the expansion (the
+	//     arrow simply did not open) and the real children landed in a row it
+	//     had already marked collapsed. That mid-expand mutation is also the
+	//     likeliest source of the gtk_css_node_insert_after criticals.
+	//   • Doing it here means all model changes are finished before the view
+	//     starts, and the row never drops to zero children.
+	// gtk_tree_view_expand_row() emits this synchronously, so fsExpandToPath's
+	// walk still sees populated children immediately.
+	void fsTestExpandRow(GtkTreeIter* it) {
 		// only populate when the placeholder child is still present
 		GtkTreeIter child;
 		if (!gtk_tree_model_iter_children(GTK_TREE_MODEL(fsStore), &child, it)) return;
 		gboolean dummy = FALSE;
 		gtk_tree_model_get(GTK_TREE_MODEL(fsStore), &child, FS_DUMMY, &dummy, -1);
 		if (!dummy) return;
-		gtk_tree_store_remove(fsStore, &child);
 
 		gchar* dirC = nullptr;
 		gtk_tree_model_get(GTK_TREE_MODEL(fsStore), it, FS_PATH, &dirC, -1);
@@ -492,8 +507,11 @@ struct NextZipController::Impl {
 		fsChildrenOf(dir, kids);
 		for (auto& k : kids) {
 			std::string full = (dir == "/") ? ("/" + k.first) : (dir + "/" + k.first);
-			fsAppend(it, full, k.first, k.second);
+			fsAppend(it, full, k.first, k.second);   // append REAL rows first…
 		}
+		// …then drop the placeholder, so the row never has zero children.
+		// (GtkTreeStore iters are persistent, so `child` is still valid here.)
+		gtk_tree_store_remove(fsStore, &child);
 	}
 	// Single left-click on a file in the top pane → view its contents below.
 	void fsSelectionChanged(GtkTreeSelection* sel) {
