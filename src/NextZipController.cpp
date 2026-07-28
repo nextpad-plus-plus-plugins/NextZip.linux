@@ -331,6 +331,14 @@ struct NextZipController::Impl {
 		fsStore = gtk_tree_store_new(FS_NCOLS, G_TYPE_ICON, G_TYPE_STRING, G_TYPE_STRING,
 		                             G_TYPE_BOOLEAN, G_TYPE_BOOLEAN);
 		fsView = gtk_tree_view_new_with_model(GTK_TREE_MODEL(fsStore));
+		// The host docks this panel via a GtkPaned whose separator carries an
+		// ENLARGED invisible grab zone (~14px) that swallows clicks along the
+		// panel's left edge — precisely where depth-1 expander arrows render.
+		// Verified by trace: presses at widget x≤12 never reach this widget.
+		// Shift the tree right so the expander gutter starts beyond the theft
+		// zone; combined with the gutter-click gesture below, the arrows get a
+		// full-size reachable target.
+		gtk_widget_set_margin_start(fsView, 20);
 		gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(fsView), FALSE);
 		gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(fsView)),
 		                            GTK_SELECTION_MULTIPLE);
@@ -359,6 +367,50 @@ struct NextZipController::Impl {
 				if (gtk_tree_view_row_expanded(tv, path)) gtk_tree_view_collapse_row(tv, path);
 				else gtk_tree_view_expand_row(tv, path, FALSE);
 			}), nullptr);
+		{
+			// GtkTreeView's native expander hit area is only a few pixels wide
+			// (measured: 1 of 9 positions across the visible arrow actually
+			// toggled), which reads as "the arrows don't work". Make the WHOLE
+			// expander gutter clickable: a capture-phase button-1 gesture that
+			// claims clicks left of the name cell's content start —
+			// gtk_tree_view_get_cell_area() excludes the expander gutter, so
+			// cell_area.x IS the gutter's right edge, exact for any theme and
+			// nesting depth — and toggles the row itself. Clicks on the icon or
+			// name are not claimed and behave as before (select / open).
+			GtkGesture* exp = gtk_gesture_click_new();
+			gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(exp), GDK_BUTTON_PRIMARY);
+			gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(exp), GTK_PHASE_CAPTURE);
+			g_signal_connect(exp, "pressed",
+				G_CALLBACK(+[](GtkGestureClick* g, int nPress, double x, double y, gpointer u) {
+					Impl* d = (Impl*)u;
+					GtkTreeView* tv = GTK_TREE_VIEW(d->fsView);
+					int bx = 0; int by = 0;
+					gtk_tree_view_convert_widget_to_bin_window_coords(tv, (int)x, (int)y, &bx, &by);
+					GtkTreePath* path = nullptr;
+					GtkTreeViewColumn* col = nullptr;
+					if (!gtk_tree_view_get_path_at_pos(tv, bx, by, &path, &col, nullptr, nullptr))
+						return;
+					GdkRectangle cell;
+					gtk_tree_view_get_cell_area(tv, path, col, &cell);
+					const bool inGutter = bx < cell.x;
+					if (inGutter) {
+						GtkTreeIter it;
+						if (nPress == 1 &&
+						    gtk_tree_model_get_iter(GTK_TREE_MODEL(d->fsStore), &it, path) &&
+						    gtk_tree_model_iter_has_child(GTK_TREE_MODEL(d->fsStore), &it)) {
+							if (gtk_tree_view_row_expanded(tv, path))
+								gtk_tree_view_collapse_row(tv, path);
+							else
+								gtk_tree_view_expand_row(tv, path, FALSE);
+						}
+						// claim every gutter press (incl. n_press>1) so the native
+						// narrow-expander handling can't double-toggle
+						gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+					}
+					gtk_tree_path_free(path);
+				}), this);
+			gtk_widget_add_controller(fsView, GTK_EVENT_CONTROLLER(exp));
+		}
 		{
 			GtkGesture* rc = gtk_gesture_click_new();
 			gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(rc), GDK_BUTTON_SECONDARY);
