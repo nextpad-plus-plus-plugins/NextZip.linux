@@ -331,18 +331,25 @@ struct NextZipController::Impl {
 		fsStore = gtk_tree_store_new(FS_NCOLS, G_TYPE_ICON, G_TYPE_STRING, G_TYPE_STRING,
 		                             G_TYPE_BOOLEAN, G_TYPE_BOOLEAN);
 		fsView = gtk_tree_view_new_with_model(GTK_TREE_MODEL(fsStore));
-		// The host docks this panel via a GtkPaned whose separator carries an
-		// ENLARGED invisible grab zone (~14px) that swallows clicks along the
-		// panel's left edge — precisely where depth-1 expander arrows render.
-		// Verified by trace: presses at widget x≤12 never reach this widget.
-		// Shift the tree right so the expander gutter starts beyond the theft
-		// zone; combined with the gutter-click gesture below, the arrows get a
-		// full-size reachable target.
-		gtk_widget_set_margin_start(fsView, 20);
 		gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(fsView), FALSE);
 		gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(fsView)),
 		                            GTK_SELECTION_MULTIPLE);
 		{
+			// The host docks this panel via a GtkPaned whose separator carries
+			// an ENLARGED invisible grab zone (~14px) that swallows clicks
+			// along the panel's left edge — precisely where depth-1 expander
+			// arrows would render (traced: presses at widget x≤12 never reach
+			// this widget). A widget margin would fix reachability but leaves
+			// a background strip and an inset selection highlight. Instead:
+			// a narrow SPACER column plus making the name column the EXPANDER
+			// column pushes the arrows right of the theft zone while row
+			// backgrounds and the selection highlight still span the full
+			// panel width.
+			GtkTreeViewColumn* spacer = gtk_tree_view_column_new();
+			gtk_tree_view_column_set_sizing(spacer, GTK_TREE_VIEW_COLUMN_FIXED);
+			gtk_tree_view_column_set_fixed_width(spacer, 18);
+			gtk_tree_view_append_column(GTK_TREE_VIEW(fsView), spacer);
+
 			GtkTreeViewColumn* col = gtk_tree_view_column_new();
 			GtkCellRenderer* ri = gtk_cell_renderer_pixbuf_new();
 			GtkCellRenderer* rt = gtk_cell_renderer_text_new();
@@ -351,6 +358,7 @@ struct NextZipController::Impl {
 			gtk_tree_view_column_add_attribute(col, ri, "gicon", FS_ICON);
 			gtk_tree_view_column_add_attribute(col, rt, "text", FS_NAME);
 			gtk_tree_view_append_column(GTK_TREE_VIEW(fsView), col);
+			gtk_tree_view_set_expander_column(GTK_TREE_VIEW(fsView), col);
 		}
 		// Populate on test-expand-row (BEFORE the view starts expanding), never on
 		// row-expanded — see fsTestExpandRow for why.
@@ -387,11 +395,15 @@ struct NextZipController::Impl {
 					int bx = 0; int by = 0;
 					gtk_tree_view_convert_widget_to_bin_window_coords(tv, (int)x, (int)y, &bx, &by);
 					GtkTreePath* path = nullptr;
-					GtkTreeViewColumn* col = nullptr;
-					if (!gtk_tree_view_get_path_at_pos(tv, bx, by, &path, &col, nullptr, nullptr))
+					if (!gtk_tree_view_get_path_at_pos(tv, bx, by, &path, nullptr, nullptr, nullptr))
 						return;
+					// Everything left of the expander column's cell content —
+					// the spacer column AND the expander gutter — is one wide
+					// toggle target (get_cell_area excludes the arrow area, so
+					// cell.x is its exact right edge).
 					GdkRectangle cell;
-					gtk_tree_view_get_cell_area(tv, path, col, &cell);
+					gtk_tree_view_get_cell_area(tv, path,
+						gtk_tree_view_get_expander_column(tv), &cell);
 					const bool inGutter = bx < cell.x;
 					if (inGutter) {
 						GtkTreeIter it;
