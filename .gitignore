@@ -1,0 +1,12 @@
+# build output
+build/
+build-*/
+
+# 7-Zip source + engine: fetched & built by deps/build-7z-engine.sh, not vendored
+deps/7zip/
+deps/7z.so
+*.o
+*.so
+*.zip
+
+.DS_Store
