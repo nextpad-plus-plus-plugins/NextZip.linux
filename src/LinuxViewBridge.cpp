@@ -50,40 +50,67 @@ struct Notebooks
 
 // A notebook reached by being the END child of some ancestor GtkPaned is a
 // secondary view; the paned's orientation tells which one.
-static void classifyNotebook(GtkWidget* nb, Notebooks& out)
-{
-    for (GtkWidget* w = nb; w; )
-    {
-        GtkWidget* parent = gtk_widget_get_parent(w);
-        if (parent && GTK_IS_PANED(parent) && gtk_paned_get_end_child(GTK_PANED(parent)) == w)
-        {
-            if (gtk_orientable_get_orientation(GTK_ORIENTABLE(parent)) == GTK_ORIENTATION_HORIZONTAL)
-                out.secondV = nb;
-            else
-                out.secondH = nb;
-            return;
-        }
-        w = parent;
-    }
-    if (!out.primary)
-        out.primary = nb;
-}
-
-static void findNotebooksIn(GtkWidget* w, Notebooks& out)
+static void collectNotebooksIn(GtkWidget* w, std::vector<GtkWidget*>& out)
 {
     if (GTK_IS_NOTEBOOK(w) && gtk_widget_has_css_class(w, "npp-editor-tabs"))
-        classifyNotebook(w, out);
+        out.push_back(w);
 
     for (GtkWidget* c = gtk_widget_get_first_child(w); c; c = gtk_widget_get_next_sibling(c))
-        findNotebooksIn(c, out);
+        collectNotebooksIn(c, out);
 }
 
+// Classification rewrite (2026-08-07). The old heuristic — "any ancestor
+// that is a paned END child ⇒ this notebook is a split view" — broke when
+// the host's split-view/dock rework wrapped the editor area in GtkPaned
+// CHAINS: the sole notebook then had a paned-end-child ancestor several
+// levels up, got filed as secondV, and primary stayed NULL — which made
+// viewNotebook() rescan (full widget-tree walk) on EVERY bridge call
+// (measured: ~510 ms per DSpellCheck recheck, 59k walks/session).
+// Robust rules instead:
+//   • exactly one editor notebook ⇒ it is the primary, period;
+//   • several ⇒ the first in tree order is primary (the host packs the
+//     original view on the START side of the split paned, and DFS visits
+//     start children first); every other notebook is classified by the
+//     paned that actually SEPARATES it from the primary — the nearest
+//     ancestor paned whose end side holds the notebook and whose start
+//     side contains the primary — horizontal ⇒ vertical split (secondV),
+//     vertical ⇒ horizontal split (secondH). Dock paneds never qualify:
+//     their other side holds panels, not the primary notebook.
 static Notebooks findNotebooks()
 {
-    Notebooks nbs;
-    if (g_host.nppHandle)
-        findNotebooksIn(g_host.nppHandle, nbs);
-    return nbs;
+    Notebooks out;
+    if (!g_host.nppHandle)
+        return out;
+
+    std::vector<GtkWidget*> nbs;
+    collectNotebooksIn(g_host.nppHandle, nbs);
+    if (nbs.empty())
+        return out;
+
+    out.primary = nbs[0];
+    for (size_t i = 1; i < nbs.size(); i++)
+    {
+        for (GtkWidget* w = nbs[i]; w; )
+        {
+            GtkWidget* parent = gtk_widget_get_parent(w);
+            if (parent && GTK_IS_PANED(parent) &&
+                gtk_paned_get_end_child(GTK_PANED(parent)) == w)
+            {
+                GtkWidget* startSide = gtk_paned_get_start_child(GTK_PANED(parent));
+                if (startSide && (startSide == out.primary ||
+                                  gtk_widget_is_ancestor(out.primary, startSide)))
+                {
+                    if (gtk_orientable_get_orientation(GTK_ORIENTABLE(parent)) == GTK_ORIENTATION_HORIZONTAL)
+                        out.secondV = nbs[i];
+                    else
+                        out.secondH = nbs[i];
+                    break;
+                }
+            }
+            w = parent;
+        }
+    }
+    return out;
 }
 
 // ── notebook cache ──────────────────────────────────────────────────────────
@@ -151,8 +178,14 @@ static GtkWidget* notebookSciAt(GtkWidget* nb, int page)
 static GtkWidget* viewNotebook(int viewNum)
 {
     GtkWidget** slot = (viewNum == SUB_VIEW) ? &g_nbCache.secondV : &g_nbCache.primary;
-    if (!g_nbCache.primary ||
-        (!*slot && g_get_monotonic_time() - g_nbScanTime > 100000))
+    // Rescan when the requested slot is empty (first call, window rebuilt,
+    // no split yet) — but ALWAYS throttled to one walk per 100 ms; only an
+    // explicit invalidate (g_nbScanTime = 0) forces an immediate rescan.
+    // The old "!primary ⇒ rescan now, unthrottled" guard turned a
+    // misclassified (or genuinely absent) primary into a full widget-tree
+    // walk on EVERY bridge call — the 2026-08-07 DSpellCheck regression.
+    if (!*slot &&
+        (g_nbScanTime == 0 || g_get_monotonic_time() - g_nbScanTime > 100000))
         nbCacheRescan();
     return *slot;
 }
