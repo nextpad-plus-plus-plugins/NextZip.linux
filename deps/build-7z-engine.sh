@@ -36,8 +36,34 @@ case "$ARCH" in
 	*)             MAK="../../cmpl_gcc.mak";       OUTDIR="b/g"       ;;
 esac
 
-echo "[7z] building $ARCH via $MAK…"
-( cd "$BUNDLE" && make -s -j"$JOBS" -f "$MAK" )
+# x86_64 assembly: upstream's var_gcc_x64.mak hardcodes USE_ASM=1 and drives
+# `asmc` (or jwasm with USE_JWASM=1) over MASM-dialect .asm sources. Neither
+# assembler is packaged by mainstream distros, and nasm/yasm cannot stand in —
+# the makefile passes MASM flags (-nologo -Fo). Without one the build dies with
+# "asmc: No such file or directory".
+#
+# So do what the macOS port does: keep the x64 makefile (IS_X64=1, correct
+# output dir and flags) and override USE_ASM to empty, which GNU make's `ifdef`
+# treats as undefined. That drops only the hand-written CRC/SHA/LZMA-decode
+# fast paths; every format and codec is still built, in pure C.
+#
+# aarch64 needs no such treatment: its assembly is GNU-syntax .S assembled by
+# the system gcc, so USE_ASM=1 works out of the box.
+ASM_OVERRIDE=""
+if [ "$OUTDIR" = "b/g_x64" ]; then
+	if command -v asmc >/dev/null 2>&1; then
+		echo "[7z] asmc found — building x86_64 with optimized assembly"
+	elif command -v jwasm >/dev/null 2>&1; then
+		echo "[7z] jwasm found — building x86_64 with optimized assembly"
+		ASM_OVERRIDE="USE_JWASM=1"
+	else
+		echo "[7z] no asmc/jwasm — building x86_64 pure C (USE_ASM=)"
+		ASM_OVERRIDE="USE_ASM="
+	fi
+fi
+
+echo "[7z] building $ARCH via $MAK $ASM_OVERRIDE…"
+( cd "$BUNDLE" && make -s -j"$JOBS" -f "$MAK" $ASM_OVERRIDE )
 
 SO="$BUNDLE/$OUTDIR/7z.so"
 [ -f "$SO" ] || { echo "[7z] ERROR: $SO not produced"; exit 1; }
