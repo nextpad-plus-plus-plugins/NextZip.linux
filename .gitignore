@@ -10,3 +10,4 @@ deps/7z.so
 *.zip
 
 .DS_Store
+dist/
