@@ -4,9 +4,10 @@
 # CreateObject / IInArchive / IOutArchive.
 #
 # The 7-Zip source (deps/7zip/) is NOT vendored in git — it is fetched on first
-# build from 7-zip.org and sha256-verified (same version + hash as the macOS
-# port). The gcc makefiles (cmpl_gcc*.mak, var_gcc*.mak) are part of upstream
-# 7-Zip, so no patching is needed. aarch64 uses the in-tree native GAS assembly
+# build from 7-zip.org and sha256-verified, then local patches from
+# deps/patches/*.patch are applied (idempotently, so re-runs are safe; same
+# patch set as the macOS port). The gcc makefiles (cmpl_gcc*.mak, var_gcc*.mak)
+# are part of upstream 7-Zip. aarch64 uses the in-tree native GAS assembly
 # (7zAsm.S / LzmaDecOpt.S); other arches fall back to the generic pure-C build.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -27,6 +28,29 @@ if [ ! -f "$BUNDLE/makefile" ]; then
 	mkdir -p "$SRC"
 	tar -xf "$TMP/$SZ_TARBALL" -C "$SRC"
 	echo "[7z] extracted to $SRC"
+fi
+
+# ── apply local patches (idempotent — safe on an already-patched tree) ─────────
+# Patch context lines are CRLF to match upstream sources; keep them that way.
+PATCHED=0
+for P in "$HERE"/patches/*.patch; do
+	[ -e "$P" ] || continue
+	if patch -p1 -d "$SRC" -N --dry-run < "$P" >/dev/null 2>&1; then
+		echo "[7z] applying $(basename "$P")"
+		patch -p1 -d "$SRC" -N < "$P"
+		PATCHED=1
+	elif patch -p1 -d "$SRC" -R --dry-run < "$P" >/dev/null 2>&1; then
+		echo "[7z] $(basename "$P") already applied — skipping"
+	else
+		echo "[7z] ERROR: $(basename "$P") does not apply to 7-Zip ${SZ_VER}" >&2
+		exit 1
+	fi
+done
+# 7-Zip's makefiles have no header dependency tracking: after a fresh patch
+# (which may touch headers) stale objects can mis-size structs and crash.
+if [ "$PATCHED" = "1" ] && [ -d "$BUNDLE/b" ]; then
+	echo "[7z] patches changed sources — cleaning previous objects"
+	rm -rf "$BUNDLE/b"
 fi
 
 ARCH="$(uname -m)"
