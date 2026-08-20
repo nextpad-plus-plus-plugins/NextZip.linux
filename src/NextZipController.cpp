@@ -326,6 +326,7 @@ struct NextZipController::Impl {
 		gtk_box_append(GTK_BOX(fstb), toolButton("Test archive", "emblem-ok-symbolic", [this]{ fsTest(); }));
 		gtk_box_append(GTK_BOX(fstb), toolButton("Delete (to Trash)", "user-trash-symbolic", [this]{ fsDelete(); }));
 		gtk_box_append(GTK_BOX(fstb), toolButton("Info / Checksum", "dialog-information-symbolic", [this]{ fsInfo(); }));
+		gtk_box_append(GTK_BOX(fstb), toolButton("Refresh", "view-refresh-symbolic", [this]{ refreshFs(); }));
 		gtk_box_append(GTK_BOX(top), fstb);
 
 		fsStore = gtk_tree_store_new(FS_NCOLS, G_TYPE_ICON, G_TYPE_STRING, G_TYPE_STRING,
@@ -456,6 +457,7 @@ struct NextZipController::Impl {
 		gtk_box_append(GTK_BOX(tb), toolButton("Extract…", "document-save-symbolic", [this]{ actExtract(); }));
 		gtk_box_append(GTK_BOX(tb), toolButton("Test", "emblem-ok-symbolic", [this]{ actTest(); }));
 		gtk_box_append(GTK_BOX(tb), toolButton("Info", "dialog-information-symbolic", [this]{ actInfo(); }));
+		gtk_box_append(GTK_BOX(tb), toolButton("Refresh", "view-refresh-symbolic", [this]{ actRefresh(); }));
 		gtk_box_append(GTK_BOX(arc), tb);
 
 		arcStore = gtk_list_store_new(AR_NCOLS, G_TYPE_ICON, G_TYPE_STRING, G_TYPE_STRING,
@@ -1264,6 +1266,18 @@ struct NextZipController::Impl {
 	}
 
 	// ── bottom toolbar: extract / test / info ────────────────────────────────
+	// Reload the on-screen archive from disk (it may have changed underneath us),
+	// staying in the current folder when it still exists after the reload.
+	void actRefresh() {
+		if (displayPath.empty()) return;
+		std::vector<std::string> cwdPath = cwd ? nodePath(cwd) : std::vector<std::string>();
+		std::string path = displayPath;               // openArchive re-stamps displayPath
+		openArchive(path, false);
+		if (!root || cwdPath.empty()) return;
+		FMNode* dest = findDirByPath(root, cwdPath);
+		if (dest) navigateTo(dest);
+	}
+
 	void actExtract() {
 		if (!root) return;
 		std::vector<uint32_t> idx = selectedIndices();   // empty = extract everything
