@@ -169,6 +169,7 @@ Popup makePopup() {
 std::string extForFormat(const std::string& f) {
 	if (f == "zip")   return "zip";
 	if (f == "tar")   return "tar";
+	if (f == "tgz")   return "tgz";
 	if (f == "gzip")  return "gz";
 	if (f == "bzip2") return "bz2";
 	if (f == "xz")    return "xz";
@@ -388,6 +389,7 @@ void addFormatChanged(AddState* st) {
 		gtk_editable_set_text(GTK_EDITABLE(st->pathField), (stripExt(p) + "." + extForFormat(f)).c_str());
 
 	bool is7z = (f == "7z"), isZip = (f == "zip"), isTar = (f == "tar");
+	bool isTgz = (f == "tgz");   // composite: tar pass + gzip pass — gzip's knobs apply
 	bool solidOK = is7z || f == "xz";
 	bool mtOK    = is7z || isZip || f == "bzip2" || f == "xz";
 	bool encOK   = is7z || isZip;
@@ -398,7 +400,7 @@ void addFormatChanged(AddState* st) {
 	auto M = [&](const char* n) { methods.push_back({n, n}); };
 	if (is7z)             { M("LZMA2"); M("LZMA"); M("PPMd"); M("BZip2"); M("Deflate"); M("Deflate64"); M("Copy"); }
 	else if (isZip)       { M("Deflate"); M("Deflate64"); M("BZip2"); M("LZMA"); M("PPMd"); }
-	else if (f == "gzip") { M("Deflate"); }
+	else if (f == "gzip" || isTgz) { M("Deflate"); }
 	else if (f == "bzip2"){ M("BZip2"); }
 	else if (f == "xz")   { M("LZMA2"); }
 	st->method.fill(methods);
@@ -411,7 +413,7 @@ void addFormatChanged(AddState* st) {
 	for (auto& lv : allLevels) {
 		int n = lv.n; bool ok;
 		if (isTar)             ok = (n == 0);
-		else if (f == "gzip")  ok = (n==1||n==5||n==7||n==9);
+		else if (f == "gzip" || isTgz) ok = (n==1||n==5||n==7||n==9);
 		else if (f == "bzip2") ok = (n==1||n==3||n==5||n==7||n==9);
 		else if (f == "xz")    ok = (n != 0);
 		else                   ok = (n==0||n==1||n==3||n==5||n==7||n==9);   // 7z, zip
@@ -488,7 +490,7 @@ NZAddOptions runAddForInputs(const std::vector<std::string>& inputs) {
 	st.fmt = makePopup(); st.level = makePopup(); st.method = makePopup();
 	st.dict = makePopup(); st.word = makePopup(); st.solid = makePopup();
 	st.threads = makePopup(); st.mem = makePopup();
-	st.fmt.fill({{"7z","7z"},{"zip","zip"},{"tar","tar"},{"gzip","gzip"},{"bzip2","bzip2"},{"xz","xz"}});
+	st.fmt.fill({{"7z","7z"},{"zip","zip"},{"tar","tar"},{"tgz","tgz"},{"gzip","gzip"},{"bzip2","bzip2"},{"xz","xz"}});
 	st.solid.fill({{"* auto",""},{"Non-solid","off"},{"1 MB","1048576b"},{"4 MB","4194304b"},
 		{"16 MB","16777216b"},{"64 MB","67108864b"},{"256 MB","268435456b"},{"1 GB","1073741824b"},
 		{"4 GB","4294967296b"},{"8 GB","8589934592b"},{"Solid","on"}});

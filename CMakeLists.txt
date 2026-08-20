@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # Keep PROJECT_VERSION in sync with the macOS port's plugin version.
-project(NextZip VERSION 1.0.0 LANGUAGES C CXX)
+project(NextZip VERSION 1.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -67,7 +67,7 @@ target_link_options(NextZip PRIVATE -Wl,--allow-shlib-undefined)
 
 # ── engine test harnesses (plain C++, no GTK; link glib for GChecksum) ────────
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
-foreach(T engine extract create add nested opts)
+foreach(T engine extract create add nested opts tgz)
   add_executable(test_${T} tests/test_${T}.cpp ${SDK_SOURCES} src/SevenZipEngine.cpp)
   target_include_directories(test_${T} PRIVATE ${SZ}/CPP ${SZ} ${CMAKE_SOURCE_DIR}/src)
   target_compile_definitions(test_${T} PRIVATE NDEBUG _REENTRANT _FILE_OFFSET_BITS=64 _LARGEFILE_SOURCE)

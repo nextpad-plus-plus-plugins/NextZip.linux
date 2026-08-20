@@ -1028,13 +1028,24 @@ struct NextZipController::Impl {
 		else    NextZipDialogs::alert("Add to Archive failed", engine->error());
 	}
 
+	// Folder name for the "extract into subfolder" variants: strip one extension,
+	// and for .tar.<z> doubles strip the inner .tar too (site.tar.gz → site;
+	// notes.tgz already reduces to notes).
+	static std::string nzExtractFolderName(const std::string& archivePath) {
+		std::string name = sBaseName(archivePath);
+		std::string base = sStripExt(name);
+		size_t dot = base.find_last_of('.');
+		if (dot != std::string::npos && dot > 0 && g_ascii_strcasecmp(base.c_str() + dot + 1, "tar") == 0)
+			base = base.substr(0, dot);
+		return base.empty() ? name : base;
+	}
 	void fsExtract() {
 		std::string a = singleArchiveSelection();
 		if (a.empty()) { NextZipDialogs::alert("Extract", "Select a single archive file first."); return; }
 		NZExtractOptions o = NextZipDialogs::runExtractForArchive(a);
 		if (!o.ok) return;
 		std::string dest = o.destDir;
-		if (o.intoSubfolder) dest += "/" + sStripExt(sBaseName(a));
+		if (o.intoSubfolder) dest += "/" + nzExtractFolderName(a);
 		extractArchive(a, dest, o.password, o.pathMode == 1, o.overwrite, o.eliminateRoot);
 	}
 	void fsExtractHere() {
@@ -1043,16 +1054,41 @@ struct NextZipController::Impl {
 	}
 	void fsExtractToSub() {
 		std::string a = singleArchiveSelection(); if (a.empty()) return;
-		std::string sub = sDirName(a) + "/" + sStripExt(sBaseName(a));
+		std::string sub = sDirName(a) + "/" + nzExtractFolderName(a);
 		extractArchive(a, sub, "", false, 0, false);
 	}
 	void extractArchive(const std::string& arcPath, const std::string& dest, const std::string& pw,
 	                    bool flatten, int overwrite, bool elim) {
 		if (arcPath.empty() || dest.empty()) return;
-		NextZipEngine eng;                                  // fresh engine — don't disturb the open view
-		if (!eng.open(arcPath)) { NextZipDialogs::alert("Extract failed", eng.error()); return; }
+		std::unique_ptr<NextZipEngine> eng(new NextZipEngine());   // fresh engine — don't disturb the open view
+		if (!eng->open(arcPath)) { NextZipDialogs::alert("Extract failed", eng->error()); return; }
+		// Tarball descent, GATED to the .tar.gz/.tgz family: only when a
+		// single-stream wrapper's lone payload is a TAR do we extract the tar's
+		// files instead of the bare inner file. Anything else keeps the plain
+		// wrapper behavior — data.json.gz yields data.json, archive.zip.gz yields
+		// archive.zip (not the zip's contents).
+		for (int guard = 0; guard < 6; guard++) {
+			if (!isSingleStream(eng->format())) break;
+			if (eng->entries().size() != 1 || eng->entries()[0].isDir) break;
+			std::string tmpDir = newLayerTempDir();
+			if (!eng->extract({0}, tmpDir)) break;
+			// The compressor wrote exactly one file into tmpDir; take it regardless of name.
+			GDir* gd = g_dir_open(tmpDir.c_str(), 0, nullptr);
+			std::string inner;
+			int count = 0;
+			if (gd) {
+				const gchar* f;
+				while ((f = g_dir_read_name(gd)) != nullptr) { count++; inner = tmpDir + "/" + f; }
+				g_dir_close(gd);
+			}
+			if (count != 1) break;
+			std::unique_ptr<NextZipEngine> probe(new NextZipEngine());
+			if (!probe->open(inner) || probe->format() != "tar")
+				break;                                                  // not a tarball → extract the wrapper as-is
+			eng = std::move(probe);
+		}
 		std::vector<uint32_t> all;                          // empty = everything
-		bool ok = extractWithEngine(&eng, all, dest, pw, flatten, overwrite, elim,
+		bool ok = extractWithEngine(eng.get(), all, dest, pw, flatten, overwrite, elim,
 		                            sBaseName(arcPath), nullptr);
 		refreshFs();
 		if (ok) NextZipDialogs::alert("Extract", "Extracted to:\n" + dest);
@@ -1206,6 +1242,7 @@ struct NextZipController::Impl {
 		pm.add("Add to archive…", [this]{ fsAdd(); });
 		pm.add("Add to \"" + qbase + ".7z\"",  [this]{ fsAddQuick("7z"); });
 		pm.add("Add to \"" + qbase + ".zip\"", [this]{ fsAddQuick("zip"); });
+		pm.add("Add to \"" + qbase + ".tgz\"", [this]{ fsAddQuick("tgz"); });
 		pm.separator();
 		pm.submenu("CRC SHA", {"CRC32","MD5","SHA1","SHA256","SHA384","SHA512"},
 		           [this](const std::string& a) { computeChecksumForSelection(a); });
