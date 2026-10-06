@@ -47,6 +47,16 @@ struct NextZipPluginHost : NextZipHost {
 		// vs macOS — PORTING_NOTES trap #8; the host rejects a swapped call).
 		panelHandle = nppData._sendMessage(nppData._nppHandle, NPPM_DMM_REGISTERPANEL,
 		                                   (uintptr_t)"NextZip", (intptr_t)v);
+		// Declare the reopen command so the host restores the panel after a
+		// restart (GH linux#18): module = getName() ("NextZip"), cmdIndex 0 =
+		// "Show NextZip Archive Manager". Hosts < 1.1.0 return 0 — ignored.
+		if (panelHandle) {
+			NppPanelInfo info;
+			info.moduleName = PLUGIN_NAME;
+			info.cmdIndex   = 0;
+			nppData._sendMessage(nppData._nppHandle, NPPM_DMM_SETPANELINFO,
+			                     (uintptr_t)panelHandle, (intptr_t)&info);
+		}
 	}
 
 	void revealPanel() override {
